@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # setup.sh — One-shot Minecraft server setup for Google Colab (ephemeral runtimes)
-# Installs:  Temurin JRE 25 → PaperMC server jar (vanilla fallback) → cloudflared
+# Installs:  Temurin JRE 25 → PaperMC server jar (vanilla fallback) → bore (direct
+#            TCP tunnel, no account) → Via* version-compat plugins → cloudflared (backup)
 # Usage:     bash setup.sh
 # Safe to re-run (idempotent). Colab wipes the VM every session, so run it
 # once per fresh runtime.
@@ -15,7 +16,7 @@ set -euo pipefail
 START=$(date +%s)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_DIR="$SCRIPT_DIR/server"
-mkdir -p "$SERVER_DIR"
+mkdir -p "$SERVER_DIR" "$SERVER_DIR/plugins"
 
 MC_VERSION="${MC_VERSION:-}"
 MC_RAM="${MC_RAM:-2048M}"
@@ -26,9 +27,9 @@ echo "  ⛏️  LA5 Colab Setup — Minecraft Server"
 echo "  $(date)"
 echo "=================================================="
 
-# ── 1/4 System prerequisites ───────────────────────────
+# ── 1/5 System prerequisites ───────────────────────────
 echo ""
-echo "[1/4] System prerequisites (curl, unzip, screen)..."
+echo "[1/5] System prerequisites (curl, unzip, screen)..."
 if command -v apt-get >/dev/null 2>&1; then
   sudo apt-get update -qq >/dev/null 2>&1 || apt-get update -qq >/dev/null 2>&1
   sudo apt-get install -y -qq curl unzip screen >/dev/null 2>&1 || apt-get install -y -qq curl unzip screen >/dev/null 2>&1
@@ -37,9 +38,9 @@ else
   echo "  ⚠️  No apt-get found — assuming prerequisites already exist"
 fi
 
-# ── 2/4 Java 25 (Temurin JRE) ──────────────────────────
+# ── 2/5 Java 25 (Temurin JRE) ──────────────────────────
 echo ""
-echo "[2/4] Java 25 (Temurin JRE)..."
+echo "[2/5] Java 25 (Temurin JRE)..."
 JAVA_DIR="$HOME/jdk25"
 JAVA_BIN="$JAVA_DIR/bin/java"
 if [ -x "$JAVA_BIN" ]; then
@@ -54,9 +55,9 @@ else
   echo "  ✅ Java: $("$JAVA_BIN" -version 2>&1 | head -1)"
 fi
 
-# ── 3/4 Minecraft server jar (Paper → vanilla fallback) ─
+# ── 3/5 Minecraft server jar (Paper → vanilla fallback) ─
 echo ""
-echo "[3/4] Minecraft server jar..."
+echo "[3/5] Minecraft server jar..."
 if [ -z "$MC_VERSION" ]; then
   echo "  🔎 Detecting latest stable Paper version..."
   MC_VERSION=$(python3 - <<'PY'
@@ -124,9 +125,79 @@ sed -i "s/^online-mode=.*/online-mode=false/" "$PROPS"
 sed -i "s/^white-list=.*/white-list=false/" "$PROPS"
 echo "  ✅ server.properties: port $MC_PORT · offline-mode (tunnel-friendly)"
 
-# ── 4/4 cloudflared (tunnel client) ────────────────────
+# ── 4/5 bore (direct TCP tunnel — address goes straight into Minecraft) ──
 echo ""
-echo "[4/4] cloudflared (Cloudflare quick tunnel)..."
+echo "[4/5] bore (direct TCP tunnel via bore.pub, no account needed)..."
+BORE_BIN=""
+if command -v bore >/dev/null 2>&1; then
+  BORE_BIN="$(command -v bore)"
+  echo "  ✅ bore already on PATH ($(bore --version 2>/dev/null | head -1))"
+elif [ -x "$SERVER_DIR/bore" ]; then
+  BORE_BIN="$SERVER_DIR/bore"
+  echo "  ✅ bore already at $BORE_BIN"
+else
+  echo "  ⬇️  Downloading bore v0.6.0 (~3 MB)..."
+  curl -fsSL -o /tmp/bore.tar.gz \
+    "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz"
+  tar xzf /tmp/bore.tar.gz -C "$SERVER_DIR"
+  rm -f /tmp/bore.tar.gz
+  chmod +x "$SERVER_DIR/bore"
+  BORE_BIN="$SERVER_DIR/bore"
+  echo "  ✅ bore installed → $BORE_BIN"
+fi
+
+# ── 5/5 Via* plugins (any Minecraft version can join) ──
+echo ""
+echo "[5/5] Via* version-compat plugins (ViaVersion + ViaBackwards + ViaRewind)..."
+VIA_OK=1
+for PLUGIN in viaversion viabackwards viarewind; do
+  JAR="$SERVER_DIR/plugins/$PLUGIN.jar"
+  if [ -s "$JAR" ]; then
+    echo "  ✅ $PLUGIN already present ($(du -h "$JAR" | cut -f1))"
+    continue
+  fi
+  echo "  ⬇️  Downloading $PLUGIN (latest stable)..."
+  DL=$(python3 - "$PLUGIN" <<'PY'
+import json, sys, urllib.request, urllib.parse
+pid = sys.argv[1]
+try:
+    q = urllib.parse.urlencode({'loaders': '["paper","spigot"]', 'limit': 10})
+    d = json.load(urllib.request.urlopen(
+        f'https://api.modrinth.com/v2/project/{pid}/version?{q}'))
+except Exception:
+    d = json.load(urllib.request.urlopen(
+        f'https://api.modrinth.com/v2/project/{pid}/version?limit=10'))
+v = next((x for x in d if 'SNAPSHOT' not in x['version_number']), d[0])
+f = v['files'][0]
+print(f['url'])
+print(f['hashes'].get('sha1', ''))
+PY
+) || true
+  URL=$(echo "$DL" | sed -n 1p)
+  SHA1=$(echo "$DL" | sed -n 2p)
+  if [ -z "$URL" ]; then
+    echo "  ⚠️  Could not resolve $PLUGIN download URL (offline?)"
+    VIA_OK=0
+    continue
+  fi
+  curl -fsSL -o "$JAR" "$URL" || { echo "  ⚠️  Download failed for $PLUGIN"; VIA_OK=0; continue; }
+  if [ -n "$SHA1" ] && command -v sha1sum >/dev/null 2>&1; then
+    if [ "$(sha1sum "$JAR" | cut -d' ' -f1)" != "$SHA1" ]; then
+      echo "  ⚠️  sha1 mismatch for $PLUGIN — keeping anyway (version-compat may be off)"
+      VIA_OK=0
+    fi
+  fi
+  echo "  ✅ $PLUGIN installed"
+done
+if [ "$VIA_OK" = 1 ]; then
+  echo "  ✅ All Via* plugins ready — clients from 1.7.10 up to the latest can join"
+else
+  echo "  ⚠️  Some Via* plugins missing — server will only accept version $MC_VERSION clients"
+fi
+
+# ── cloudflared (backup tunnel, only if bore.pub is unreachable) ──
+echo ""
+echo "📦 cloudflared (backup tunnel client)..."
 if command -v cloudflared >/dev/null 2>&1; then
   echo "  ✅ cloudflared already installed ($(cloudflared --version 2>/dev/null | head -1))"
 else
@@ -146,6 +217,7 @@ fi
 cat > "$SERVER_DIR/mc-env" <<EOF
 MC_JAR="$SERVER_DIR/paper.jar"
 JAVA_BIN="$JAVA_BIN"
+BORE_BIN="$BORE_BIN"
 PORT=$MC_PORT
 MC_RAM=$MC_RAM
 MC_VERSION=$MC_VERSION

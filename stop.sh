@@ -16,6 +16,7 @@ for _ in $(seq 1 10); do
   sleep 1
 done
 pkill -9 -f 'paper[.]jar' 2>/dev/null || true
+pkill -f '[b]ore local' 2>/dev/null || true
 pkill -f '[c]loudflared tunnel --url tcp' 2>/dev/null || true
 
-echo "✅ Server and tunnel stopped."
+echo "✅ Server and tunnels stopped."
