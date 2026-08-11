@@ -1,141 +1,135 @@
-# ⛏️ minecraft-colab — Minecraft server on Google Colab
+# ⛏️ LA5 Minecraft Server — Google Colab Edition
 
-A private Minecraft (Java Edition) server that runs on a Google Colab machine.
-Clone the repo, run **two commands**, and you get a **direct connection address**
-you paste straight into Minecraft — no client software, no extra steps.
-Exactly like the `colab-setup` pattern for OpenClaw.
+A Minecraft Java server that runs on a free Google Colab machine and supports
+**every client**: normal Minecraft **Java** clients (1.7.10 → latest, via
+ViaVersion) and **Eaglercraft browser** clients (1.5.2 / 1.8 / 1.12.2, via
+EaglerXServer) — including the offline WASM Eaglercraft HTML file.
 
-```
-bash setup.sh     # installs Java 25, Paper server, tunnel + version-compat plugins (one-time per session)
-bash start.sh     # starts the server + public tunnel, prints the address to paste into Minecraft
-```
+Colab VMs are ephemeral (wiped when closed), so the world can be **saved to
+GitHub** and **auto-restored** on the next run.
 
-## Quick start (on Colab)
+---
 
-1. Open a new notebook → Runtime → Change runtime type → **T4 GPU or CPU** (either works; CPU is fine, GPU is unused).
-2. In a cell, clone with your GitHub access token (the repo is **private**):
+## Quick start (fresh Colab)
 
-   ```
-   !git clone https://<YOUR-TOKEN>@github.com/Walusimbi-Leon1/minecraft-colab.git
-   ```
+Open a Google Colab notebook → Runtime → **Run all** (or a terminal cell) and run:
 
-3. Set up (2–3 min: Java ~50 MB + Paper ~60 MB + plugins ~15 MB):
+```bash
+# 1. Clone this repo (use your GitHub token in the URL so save/restore works)
+git clone https://<YOUR_GITHUB_TOKEN>@github.com/Walusimbi-Leon1/minecraft-colab.git
+cd minecraft-colab
 
-   ```
-   %cd minecraft-colab
-   !bash setup.sh
-   ```
+# 2. Install everything (Java, Paper 1.12.2, plugins, tunnels) — ~1 min
+bash setup.sh
 
-4. Start the server and get your address:
-
-   ```
-   !bash start.sh
-   ```
-
-   Wait for `✅ Minecraft server is LIVE!` — it prints the address.
-
-## Joining from your PC
-
-**In Minecraft Java Edition:** Multiplayer → Add Server → Server Address:
-
-```
-bore.pub:43829        ← the exact address start.sh prints (port varies per run)
+# 3. Start the server + tunnels
+bash start.sh
 ```
 
-Then just click **Join**. That's it — no tunnel software, no batch files, nothing else to install.
+`start.sh` prints **both** addresses:
 
-## Version compatibility — every Minecraft version works
+```
+  🖥️  JAVA EDITION (normal Minecraft client):
+      Server Address:  bore.pub:30175
 
-The server runs the latest PaperMC, plus **ViaVersion + ViaBackwards + ViaRewind**
-plugins (installed automatically by `setup.sh`). Any Java Edition client from
-**1.7.10 up to the latest** can join, regardless of what version you have installed.
+  🌐 EAGLERCRAFT (browser client, e.g. the offline HTML):
+      Server Address:  wss://ram-hardly-oct-baking.trycloudflare.com
+```
 
-> ⚠️ Bedrock Edition is not supported (this is a Java Edition server over TCP).
+- **Java client** → Multiplayer → Add Server → paste the `bore.pub:PORT` address → Join.
+- **Eaglercraft** (the WASM offline HTML, or any Eaglercraft client) → Multiplayer →
+  Add Server → paste the `wss://…trycloudflare.com` address → Join.
 
-> 🛠️ If the server won't start because of a **corrupt world** (e.g. Colab was killed
-> mid-save), you'll see `Overworld settings missing` in the log. Fix:
-> `rm -rf server/world server/world_nether server/world_the_end` then `bash start.sh`
-> (a fresh world generates). Save often with `./save-world.sh`.
+> Browsers cannot open raw TCP connections, which is why Eaglercraft gets its
+> own `wss://` WebSocket tunnel (cloudflared) while Java clients use the
+> direct TCP tunnel (bore.pub). Both run automatically.
 
-## Options (env vars)
+---
 
-| Var | Default | What it does |
-|---|---|---|
-| `MC_VERSION` | latest stable | Paper version, e.g. `26.2`, `1.21.4` (set before `setup.sh`) |
-| `MC_RAM` | `2048M` | Server heap size (Colab has ~12 GB — `4G` is safe) |
-| `MC_PORT` | `25565` | Server port (only change if you know what you're doing) |
+## 💾 Saving & restoring your world (survives Colab resets)
 
-Example: `MC_VERSION=1.21.4 MC_RAM=4G bash setup.sh`
+### Save
 
-## Useful commands
+```bash
+./save-world.sh
+```
+
+This packs your world and uploads it to a GitHub Release called
+**`world-save`** in this repository (asset `world.tar.gz`). Re-running
+replaces the previous save. Requires the GitHub token (env `GH_TOKEN`, a
+`.token` file, or the token in your clone URL).
+
+Optional auto-save: `AUTOSAVE=15 bash start.sh` saves every 15 minutes
+(default is on at 15 min; `AUTOSAVE=0` disables).
+
+### Restore
+
+On the next fresh Colab session:
+
+```bash
+bash setup.sh     # installs everything again (Colab wiped it)
+bash start.sh     # detects the saved world on GitHub → downloads & loads it
+```
+
+`start.sh` checks for a local `server/world` folder first; if absent, it
+looks for the `world-save` GitHub Release and restores it automatically.
+No world saved yet → a fresh new world is generated.
+
+---
+
+## Commands
 
 | Command | What it does |
 |---|---|
-| `./mc.sh <command>` | Send a server console command, e.g. `./mc.sh say hello` |
-| `./mc.sh log` | Follow the server log (Ctrl+C to exit) |
-| `./mc.sh whitelist add <name>` | Allow a specific player (recommended!) |
-| `./save-world.sh` | Back up the world to a tarball (download via Colab Files panel) |
-| `./stop.sh` | Gracefully stop server + tunnel |
+| `bash setup.sh` | Install everything (Java, Paper, plugins, tunnels). Idempotent. |
+| `bash start.sh` | Start server + both tunnels, print addresses, restore world. |
+| `./save-world.sh` | Upload world to GitHub release `world-save`. |
+| `./mc.sh <cmd>` | Send a server command, e.g. `./mc.sh say hello`, `./mc.sh whitelist add <name>` |
+| `./mc.sh log` / `./mc.sh tail` | Follow / tail the server log. |
+| `./stop.sh` | Stop server + tunnels. |
 
-## Backup tunnel (only if bore.pub is unreachable)
-
-`start.sh` uses **bore** (bore.pub) for the direct address. If bore.pub is ever
-down, start.sh automatically falls back to a **Cloudflare quick tunnel** and
-prints its URL instead. That one needs cloudflared on your PC:
-
-```
-cloudflared access tcp --hostname xxxx.trycloudflare.com --url 127.0.0.1:25565
-```
-
-then join `localhost:25565` in Minecraft. (Install cloudflared from
-cloudflare.com/cloudflare-one/connections/connect-networks/downloads/ — you'll
-only need it in this rare fallback case.)
-
-## Security notes
-
-- The server runs in **offline mode** (`online-mode=false`) so any client can join through the tunnel. **Whitelist your players** to keep strangers out:
-  ```
-  ./mc.sh whitelist on
-  ./mc.sh whitelist add YourName
-  ./mc.sh whitelist add FriendName
-  ```
-- The address/port is random and changes every `start.sh` run — share it only with people you trust.
-- Anyone who can read this private repo can run the server — don't share your GitHub token.
+---
 
 ## How it works
 
-1. `setup.sh` installs Temurin **JRE 25**, downloads the **PaperMC** server jar (latest stable; falls back to vanilla if the Paper API is down), accepts the EULA, pre-seeds `server.properties`, installs **bore** + **cloudflared**, and drops the **Via\*** plugins into `server/plugins/`.
-2. `start.sh` launches the server inside a `screen` session named `mc`, waits until it's fully up (`Done`), then opens a **bore tunnel** — a free, account-less raw-TCP tunnel to `bore.pub`. The client connects to `bore.pub:<port>` **directly**; Minecraft speaks normal TCP, so no client software is needed.
-3. If bore.pub is unreachable, start.sh falls back to a **Cloudflare quick tunnel** (`cloudflared tunnel --url tcp://localhost:25565`) and prints it as the backup option.
+| Piece | What / why |
+|---|---|
+| **Paper 1.12.2** (default) | Eaglercraft plugins require old Bukkit APIs — 1.12.2 is the newest version they support. |
+| **Java 8 (Temurin)** | Paper 1.12.2's paperclip bootstrapper can't patch on Java 9+; JRE 8 is auto-installed for legacy mode. |
+| **EaglerXServer + EaglerXRewind** | Speaks the Eaglercraft protocol on the server side; the wss:// tunnel reaches it. |
+| **ViaVersion / ViaBackwards / ViaRewind** | Any normal Java client 1.7.10 → latest can join the 1.12.2 server. |
+| **bore.pub tunnel** | Free, account-less raw-TCP tunnel → `bore.pub:PORT` goes straight into Minecraft's Add Server. |
+| **cloudflared tunnel** | WebSocket (wss://) tunnel for Eaglercraft browser clients. |
+| **save-world.sh + start.sh** | World ⇄ GitHub Release (`world-save`), so Colab resets don't lose progress. |
 
-### Why bore instead of a trycloudflare URL in the Add Server box?
+### Switching to a modern server (no Eaglercraft)
 
-A trycloudflare quick tunnel carries raw TCP only through the `cloudflared`
-client — Minecraft cannot connect to it directly (the edge speaks HTTP/WS to the
-tunnel client, and Minecraft speaks plain TCP). bore.pub exposes a real
-`host:port` TCP endpoint, which is exactly what Minecraft's Add Server field
-accepts. It needs no account and no credentials in this repo.
+Set `MC_VERSION=26.2 bash setup.sh` to run the latest Paper (Java 25,
+Eagler plugins skipped automatically). Java clients still work through
+Via*; Eaglercraft clients won't (they need the 1.12.2 stack).
 
-### Why not a named tunnel on one of our Cloudflare accounts?
+---
 
-Named tunnels need a zone/domain to route a stable hostname — our accounts have
-**no zones**. bore/quick tunnels need no credentials at all (nothing secret
-lands in this repo). If you ever add a domain to Cloudflare, we can switch to a
-stable named tunnel easily.
+## Notes & gotchas
 
-## Colab limitations (expected)
+- **Offline mode** is on (needed for tunnels). Keep strangers out:
+  `./mc.sh whitelist on` then `./mc.sh whitelist add <your-username>`.
+- Colab disconnects kill the VM after ~90 min idle — the world is safe
+  once saved (`./save-world.sh` or autosave).
+- World format is tied to the server version: a 26.2 world can't be loaded
+  by the 1.12.2 stack and vice versa. Save/restore assumes a consistent
+  `MC_VERSION`.
+- bore.pub ports are random per run (fine — the address is printed every
+  start; your client just needs re-adding if the port changed).
+- The trycloudflare URL also changes per run.
 
-- The VM is **ephemeral**: everything (world, config) is wiped when the session ends / after ~12 h idle / 24 h max uptime. The server files live in the repo dir, so re-running `setup.sh` is quick — but **save your world** (`./save-world.sh`) and copy the tarball somewhere safe (Drive/GitHub) before closing.
-- The address changes every start (random bore port). A stable address needs a VPS relay or a Cloudflare domain (see above).
-- Java Edition only (TCP). Bedrock/UDP is not supported by this setup.
-
-## Files
+## Repo layout
 
 ```
-setup.sh               # one-time install: Java + Paper + bore + Via* plugins + cloudflared + config
-start.sh               # start server + direct tunnel, print the Minecraft address
-stop.sh                # graceful stop
-mc.sh                  # server console helper (commands / log)
-save-world.sh          # world backup tarball
-server/                # created at runtime (gitignored): jar, world, plugins, logs, config
+setup.sh        one-time install (Java, Paper, plugins, tunnels)
+start.sh        start server + tunnels, restore world, print addresses
+save-world.sh   upload world to GitHub release "world-save"
+stop.sh         stop server + tunnels
+mc.sh           server console helper
+server/         runtime (created by setup.sh: jar, plugins, world, logs)
 ```
