@@ -29,15 +29,20 @@ MC_VERSION="${MC_VERSION:-1.12.2}"
 MC_RAM="${MC_RAM:-2048M}"
 MC_PORT="${MC_PORT:-25565}"
 
-# Legacy Paper (<=1.16, e.g. 1.12.2 Eagler stack) needs Java 8: its
-# paperclip bootstrapper can't patch on modern JVMs. Modern needs 21+.
+# Legacy Paper (≤1.16, e.g. 1.12.2 Eagler stack): its paperclip bootstrapper
+# can only patch the jar on Java 8 ("SystemClassLoader not URLClassLoader" on
+# newer JVMs) — but EaglerXServer v1.1.1 and modern Via* are compiled for
+# Java 17. So legacy mode: JRE 8 patches once → runtime uses JRE 17.
+# Modern Paper (≥1.17) needs Java 21+ → JRE 25.
 MAJOR="${MC_VERSION%%.*}"
 MINOR="${MC_VERSION#*.}"; MINOR="${MINOR%%.*}"
 EAGLER_MODE=0
 JAVA_MAJOR=25
+PATCH_JAVA_MAJOR=0
 if [ "$MAJOR" = 1 ] && [ "${MINOR:-0}" -le 16 ]; then
   EAGLER_MODE=1
-  JAVA_MAJOR=8
+  JAVA_MAJOR=17
+  PATCH_JAVA_MAJOR=8
 fi
 
 echo "=================================================="
@@ -56,9 +61,9 @@ else
   echo "  ⚠️  No apt-get found — assuming prerequisites already exist"
 fi
 
-# ── 2/6 Java (Temurin JRE, version auto-picked) ───────
+# ── 2/6 Java (Temurin JRE; runtime + paperclip-patch JRE) ──
 echo ""
-echo "[2/6] Java $JAVA_MAJOR (Temurin JRE)..."
+echo "[2/6] Java (Temurin JRE, runtime $JAVA_MAJOR${PATCH_JAVA_MAJOR:+ + patch $PATCH_JAVA_MAJOR})..."
 JAVA_DIR="$HOME/jdk$JAVA_MAJOR"
 JAVA_BIN="$JAVA_DIR/bin/java"
 if [ -x "$JAVA_BIN" ]; then
@@ -71,6 +76,22 @@ else
   tar xzf /tmp/jre.tar.gz -C "$JAVA_DIR" --strip-components=1
   rm -f /tmp/jre.tar.gz
   echo "  ✅ Java: $("$JAVA_BIN" -version 2>&1 | head -1)"
+fi
+PATCH_JAVA_BIN=""
+if [ -n "$PATCH_JAVA_MAJOR" ] && [ "$PATCH_JAVA_MAJOR" != "$JAVA_MAJOR" ]; then
+  PATCH_JAVA_DIR="$HOME/jdk$PATCH_JAVA_MAJOR"
+  PATCH_JAVA_BIN="$PATCH_JAVA_DIR/bin/java"
+  if [ -x "$PATCH_JAVA_BIN" ]; then
+    echo "  ✅ Patch Java already at $PATCH_JAVA_DIR"
+  else
+    echo "  ⬇️  Downloading Temurin JRE $PATCH_JAVA_MAJOR (for paperclip patching)..."
+    mkdir -p "$PATCH_JAVA_DIR"
+    curl -fsSL -o /tmp/jre-patch.tar.gz \
+      "https://api.adoptium.net/v3/binary/latest/$PATCH_JAVA_MAJOR/ga/linux/x64/jre/hotspot/normal/eclipse"
+    tar xzf /tmp/jre-patch.tar.gz -C "$PATCH_JAVA_DIR" --strip-components=1
+    rm -f /tmp/jre-patch.tar.gz
+    echo "  ✅ Patch Java: $("$PATCH_JAVA_BIN" -version 2>&1 | head -1)"
+  fi
 fi
 
 # ── 3/6 Minecraft server jar (Paper → vanilla fallback) ─
@@ -86,7 +107,8 @@ import json, sys, urllib.request
 v = sys.argv[1]
 bs = json.load(urllib.request.urlopen(f'https://fill.papermc.io/v3/projects/paper/versions/{v}/builds'))
 stable = [b for b in bs if b.get('channel') == 'STABLE']
-b = (stable or bs)[-1]
+# API returns newest-first; pick the NEWEST stable build.
+b = (stable or bs)[0]
 print(b['downloads']['server:default']['url'])
 PY
 ) || true
@@ -130,6 +152,34 @@ PY2
   fi
 fi
 
+# Paperclip can only PATCH on Java 8 (legacy mode) — do it once now so the
+# runtime (Java 17) can just execute the pre-patched jar.
+if [ "$EAGLER_MODE" = 1 ] && [ -n "$PATCH_JAVA_BIN" ] && [ ! -s "$SERVER_DIR/cache/patched_$MC_VERSION.jar" ]; then
+  echo "  🔧 Pre-patching paperclip with Java 8 (one-time, ~30s)..."
+  ( cd "$SERVER_DIR" && setsid "$PATCH_JAVA_BIN" -Xms512M -Xmx1024M -jar paper.jar \
+      > patch-run.log 2>&1 < /dev/null & echo $! > /tmp/patchpid )
+  PATCHED=0
+  for _ in $(seq 1 90); do
+    if [ -s "$SERVER_DIR/cache/patched_$MC_VERSION.jar" ]; then
+      PATCHED=1
+      break
+    fi
+    sleep 1
+  done
+  # Stop the patcher (it may still be booting the server — that's fine)
+  [ -f /tmp/patchpid ] && kill "$(cat /tmp/patchpid)" 2>/dev/null || true
+  pkill -f 'paper[.]jar' 2>/dev/null || true
+  # Drop any world the patch-boot generated — a GitHub restore (start.sh)
+  # should win over a 30-second-old throwaway world.
+  rm -rf "$SERVER_DIR/world" "$SERVER_DIR/world_nether" "$SERVER_DIR/world_the_end"
+  if [ "$PATCHED" = 1 ]; then
+    echo "  ✅ Paper patched (Java 17 runtime will be used)"
+  else
+    echo "  ⚠️  Patching did not produce cache/patched_$MC_VERSION.jar —"
+    echo "      check server/patch-run.log; server may fail to start"
+  fi
+fi
+
 # Accept the EULA (required before first start; running your own server is allowed)
 echo "eula=true" > "$SERVER_DIR/eula.txt"
 echo "  ✅ eula.txt accepted (eula=true)"
@@ -155,7 +205,8 @@ echo "  ✅ server.properties: port $MC_PORT · offline-mode (tunnel-friendly)"
 # ── 4/6 Version-compat + Eaglercraft plugins ───────────
 echo ""
 echo "[4/6] Plugins: Via* (all versions) + EaglerXServer (browser clients)..."
-# ViaVersion/ViaBackwards/ViaRewind — any Java client 1.7.10 → latest joins
+# ViaVersion/ViaBackwards/ViaRewind — any Java client 1.7.10 → latest joins.
+# (Runtime is always Java 17+ in both modes, so latest 5.x works everywhere.)
 for PLUGIN in viaversion viabackwards viarewind; do
   JAR="$SERVER_DIR/plugins/$PLUGIN.jar"
   if [ -s "$JAR" ]; then
