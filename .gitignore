@@ -1,0 +1,4 @@
+# Minecraft server runtime artifacts — never commit these
+server/
+*.log
+world-backup-*.tar.gz
