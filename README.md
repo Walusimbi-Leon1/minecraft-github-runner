@@ -95,7 +95,7 @@ No world saved yet → a fresh new world is generated.
 | Piece | What / why |
 |---|---|
 | **Paper 1.12.2** (default) | Eaglercraft plugins require old Bukkit APIs — 1.12.2 is the newest version they support. |
-| **Java 8 (Temurin)** | Paper 1.12.2's paperclip bootstrapper can't patch on Java 9+; JRE 8 is auto-installed for legacy mode. |
+| **Java 8 + Java 17 (Temurin)** | Paper 1.12.2's paperclip can only *patch* on Java 8 (done once at setup); the server then runs on Java 17, which EaglerXServer and Via* 5.x require. |
 | **EaglerXServer + EaglerXRewind** | Speaks the Eaglercraft protocol on the server side; the wss:// tunnel reaches it. |
 | **ViaVersion / ViaBackwards / ViaRewind** | Any normal Java client 1.7.10 → latest can join the 1.12.2 server. |
 | **bore.pub tunnel** | Free, account-less raw-TCP tunnel → `bore.pub:PORT` goes straight into Minecraft's Add Server. |
