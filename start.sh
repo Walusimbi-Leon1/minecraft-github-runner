@@ -102,9 +102,9 @@ fi
 pkill -f 'paper[.]jar' 2>/dev/null || true
 sleep 2
 pkill -9 -f 'paper[.]jar' 2>/dev/null || true
-pkill -f '[b]ore local' 2>/dev/null || true
+pkill -f "[b]ore local $PORT" 2>/dev/null || true
 pkill -f '[c]loudflared tunnel --url tcp' 2>/dev/null || true
-pkill -f '[c]loudflared tunnel --url http://localhost:' 2>/dev/null || true
+pkill -f "[c]loudflared tunnel --url http://localhost:$PORT" 2>/dev/null || true
 sleep 1
 
 # ── Start the server (in a screen session named "mc") ──
