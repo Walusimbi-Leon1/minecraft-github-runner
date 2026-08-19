@@ -6,15 +6,15 @@ on:
       duration:
         description: "How long to run the server (seconds)"
         required: false
-        default: "10800"  # 3 hours
+        default: "10800"
 
 permissions:
-  contents: write   # needed to create/update the 'world-save' release
+  contents: write
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 200   # 3h + buffer
+    timeout-minutes: 200
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,25 +25,18 @@ jobs:
       - name: Start server & hold for duration
         env:
           DURATION: ${{ github.event.inputs.duration || '10800' }}
-          GITHUB_TOKEN: *** secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_PAT: ${{ secrets.GH_PAT }}
-          MC_PORT: 25565
-          MC_BORE_PORT: 30176
+          MC_PORT: "25565"
+          MC_BORE_PORT: "30176"
         run: |
           set -uo pipefail
           cd "$GITHUB_WORKSPACE"
-
-          # 1. Restore last world save if a release asset exists.
-          # ... (save-world.sh will restore on next start)
-
-          # 2. Start the server (background) + bore relay.
           ./start.sh
           SERVER_PID=$(cat server.pid 2>/dev/null || echo "")
           BORE_PID=$(cat bore.pid 2>/dev/null || echo "")
           echo "Server PID: $SERVER_PID | Bore PID: $BORE_PID"
-
-          # 3. Auto-save every 15 minutes, then final save.
           DUR=${DURATION:-10800}
           SAVED=0
           echo "=== Auto-save loop every 15 min ==="
@@ -53,23 +46,18 @@ jobs:
             sleep 900
             SAVED=$((SAVED + 900))
             echo "--- Auto-save #$i at $(date) (t=${SAVED}s) ---"
-            # Ask the server to flush the world to disk
             if [ -n "$SERVER_PID" ]; then
               kill -USR1 "$SERVER_PID" 2>/dev/null || true
             fi
             sleep 10
-            bash save-world.sh || echo "⚠️  Auto-save failed — continuing"
+            bash save-world.sh || echo "Auto-save failed — continuing"
           done
-
-          # 4. Final save before shutdown.
           echo "=== Final world save before shutdown ==="
           if [ -n "$SERVER_PID" ]; then
             kill -USR1 "$SERVER_PID" 2>/dev/null || true
             sleep 5
           fi
-          bash save-world.sh || echo "⚠️  Final save failed (server may have exited)"
-
-          # 5. Graceful shutdown.
+          bash save-world.sh || echo "Final save failed (server may have exited)"
           echo "=== Shutting down ==="
           [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
           [ -n "$BORE_PID" ] && kill "$BORE_PID" 2>/dev/null || true
