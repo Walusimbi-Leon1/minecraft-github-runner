@@ -8,10 +8,13 @@ on:
         required: false
         default: "10800"  # 3 hours
 
+permissions:
+  contents: write   # needed to create/update the 'world-save' release
+
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 180   # 3h + buffer
+    timeout-minutes: 200   # 3h + buffer
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,15 +22,40 @@ jobs:
       - name: Setup Minecraft server
         run: ./setup.sh
 
-      - name: Start server & hold for duration
+      - name: Start server
         env:
-          DURATION: ${{ github.event.inputs.duration || '10800' }}
+          MC_PORT: 25565
+          MC_BORE_PORT: 30176
+        run: ./start.sh &
+
+      - name: Auto-save every 15 minutes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          echo "Starting server for ${DURATION}s...";
-          ./start.sh &
-          SERVER_PID=$!
-          sleep "$DURATION"
-          echo "Time elapsed — shutting down...";
-          kill $SERVER_PID 2>/dev/null || true
-          wait $SERVER_PID 2>/dev/null || true
+          # Save immediately so backup exists
+          bash save-world.sh
+
+          # Then every 15 minutes for ~3 hours (12 saves)
+          for i in $(seq 1 11); do
+            sleep 900
+            echo "=== Auto-save #$i at $(date) ==="
+            bash save-world.sh
+          done
+
+      - name: Final save & shutdown (on timeout)
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=== Final world save before shutdown ==="
+          # Try to ask a running server to save-all (if screen/pid exists)
+          if [ -f server.pid ]; then
+            echo "save-all" | timeout 5 bash -c "cat > /proc/$(cat server.pid)/fd/0" 2>/dev/null || true
+          fi
+          bash save-world.sh || echo "Final save failed (server may have exited)"
+          echo "=== Shutting down ==="
+          [ -f server.pid ] && kill $(cat server.pid) 2>/dev/null || true
+          [ -f bore.pid ] && kill $(cat bore.pid) 2>/dev/null || true
+          echo "Shutdown complete."
