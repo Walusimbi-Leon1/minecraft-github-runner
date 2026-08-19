@@ -13,9 +13,11 @@ BORE_PORT=${MC_BORE_PORT:-30176}
 cd "$(dirname "$0")"
 
 # --- Start PaperMC server in a screen session ---
-# The jar is downloaded into ./server/ by setup.sh
+# The jar is downloaded into ./server/ by setup.sh.
+# -L -Logfile captures the server's stdout/stderr (incl. PaperMC's
+# "Downloading mojang.../Applying patches" + any crash) to server/server.log
 echo "Starting Minecraft server (port $PORT, ram $RAM)..."
-screen -dmS mc java -Xmx$RAM -Xms2G -jar server/paper.jar nogui
+screen -dmS mc -L -Logfile server/server.log java -Xmx$RAM -Xms2G -jar server/paper.jar nogui
 echo "Server screen 'mc' started."
 
 # Give the server a moment to bind
