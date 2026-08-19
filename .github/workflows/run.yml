@@ -40,7 +40,12 @@ jobs:
           DURATION=$(jq -r '.inputs.duration // "10800"' "$GITHUB_EVENT_PATH" 2>/dev/null || echo 10800)
           ./start.sh
           BORE_PID=$(cat bore.pid 2>/dev/null || true)
+          # start.sh resolves the *real* live bore.pub:<port> and writes it
+          # to server-address.txt — use that instead of the static MC_BORE_PORT.
+          ADDRESS=$(cat server-address.txt 2>/dev/null || echo "bore.pub:$MC_BORE_PORT")
           echo "Bore relay PID: ${BORE_PID}"
+          echo "Minecraft server address: $ADDRESS"
+          echo "server_address=$ADDRESS" >> "$GITHUB_OUTPUT"
           # Wait up to ~3 min for the world to generate before first save
           for w in $(seq 1 18); do
             if [ -d server/world ]; then echo "World generated after ~$((w*10))s"; break; fi

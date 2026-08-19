@@ -30,14 +30,34 @@ echo "Server status:"
 screen -ls mc || echo "  (no screen session — server may have crashed; see server/server.log)"
 
 # --- Start bore.pub relay (from repo root so ./bore resolves) ---
-echo "Starting bore.pub relay on port $BORE_PORT..."
+# NOTE: bore's *pub* port is NOT the same as $BORE_PORT (which is the upstream
+# port we request). bore.pub assigns a public port dynamically. We must read
+# the *actual* assigned address from bore.log, not assume $BORE_PORT.
+# Passing --to bore.pub:$BORE_PORT only requests that upstream port; the real
+# public endpoint comes back in bore.log.
+echo "Starting bore.pub relay (requesting upstream port $BORE_PORT)..."
 nohup "$REPO_ROOT/bore" local tcp://127.0.0.1:$PORT --to bore.pub:$BORE_PORT > "$REPO_ROOT/bore.log" 2>&1 &
 echo $! > "$REPO_ROOT/bore.pid"
 BORE_PID=$!
 
-# Read the assigned public address from bore.log
-sleep 3
+# Read the REAL assigned public address from bore.log.
+# bore takes a few seconds to register; poll up to ~60s for the address line.
+echo "Waiting for bore to register the public address..."
+ADDRESS=""
+for i in $(seq 1 30); do
+  ADDRESS=$(grep -oE 'bore\.pub:[0-9]+' "$REPO_ROOT/bore.log" 2>/dev/null | head -1 || true)
+  if [ -n "$ADDRESS" ]; then break; fi
+  sleep 2
+done
+
 echo "=== Minecraft server ready ==="
-grep -oE 'bore\.pub:[0-9]+' "$REPO_ROOT/bore.log" | head -1 | sed 's/^/Connect to: /' || echo "Connect to: bore.pub:$BORE_PORT"
+if [ -n "$ADDRESS" ]; then
+  echo "Connect to: $ADDRESS"
+else
+  echo "Connect to: bore.pub:$BORE_PORT (fallback — address not read from bore.log)"
+fi
+# Persist the real address for the workflow + for operators
+printf '%s' "$ADDRESS" > "$REPO_ROOT/server-address.txt" 2>/dev/null || true
+echo "$ADDRESS" > "$SERVER_DIR/server-address.txt" 2>/dev/null || true
 echo "(Use 'Java Edition' or EagleCraft browser client)"
 echo "Server is running in screen session 'mc'."

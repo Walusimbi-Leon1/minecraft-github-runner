@@ -106,4 +106,4 @@ chmod +x bore
 
 echo "=== Minecraft server ready to start ==="
 echo "Run: ./start.sh"
-echo "Connect to: bore.pub:30176 (after start)"
+echo "(start.sh will print the actual, live bore.pub:<port> address)"
