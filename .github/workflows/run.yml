@@ -15,6 +15,9 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 200
+    env:
+      MC_PORT: "25565"
+      MC_BORE_PORT: "30176"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,16 +26,16 @@ jobs:
         run: ./setup.sh
 
       - name: Start server & hold for duration
-        env:
-          DURATION: ${{ github.event.inputs.duration || '10800' }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_PAT: ${{ secrets.GH_PAT }}
-          MC_PORT: "25565"
-          MC_BORE_PORT: "30176"
         run: |
           set -uo pipefail
           cd "$GITHUB_WORKSPACE"
+          # Read duration from the dispatch event payload (no ${{ }} needed)
+          DURATION=$(python3 -c "import json,os,sys; \
+            try: print(json.load(open(os.environ['GITHUB_EVENT_PATH']))['inputs']['duration']) \
+            except Exception: print('10800')" 2>/dev/null || echo 10800)
+          # Make sure the auto-provided token is visible to save-world.sh
+          export GH_TOKEN="$GITHUB_TOKEN"
+          export GH_PAT="${GH_PAT:-$GITHUB_TOKEN}"
           ./start.sh
           SERVER_PID=$(cat server.pid 2>/dev/null || echo "")
           BORE_PID=$(cat bore.pid 2>/dev/null || echo "")

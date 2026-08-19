@@ -12,26 +12,30 @@ echo "Java version:"; java -version 2>&1 | head -1
 # --- Minecraft server jar ---
 # Try PaperMC first via fill.papermc.io/v3 (new API). Fallback to vanilla via Mojang.
 echo "[3/6] Downloading Minecraft server jar..."
+
+# IMPORTANT: create server dir BEFORE downloading (curl can't write into a missing dir)
+mkdir -p server
 SERVER_JAR="server/paper.jar"
-VANILLA_JAR="server/vanilla.jar"
 MC_VERSION=${MC_VERSION:-1.21.1}
 
 # --- Try PaperMC via fill.papermc.io/v3 ---
+# v3 API returns a bare ARRAY of build objects, NEWEST FIRST (build 133, 132, ...).
+# Pick the newest STABLE build (index 0 = newest).
 echo "  Attempting PaperMC $MC_VERSION..."
 JAR_URL=""
-python3 - "$MC_VERSION" <<'PY' 2>/dev/null || JAR_URL=""
+JAR_URL=$(python3 - "$MC_VERSION" <<'PY' 2>/dev/null || true)
 import json, sys, urllib.request
 v = sys.argv[1]
-# v3 API returns a bare array of build objects (no 'builds' wrapper)
 bs = json.load(urllib.request.urlopen(f'https://fill.papermc.io/v3/projects/paper/versions/{v}/builds'))
 stable = [b for b in bs if b.get('channel') == 'STABLE']
-# pick the newest stable (or newest if no stable flag)
-b = (stable or bs)[-1]
+# bs is newest-first, so [0] is the newest build
+b = (stable or bs)[0]
 print(b['downloads']['server:default']['url'])
 PY
+
 if [ -n "$JAR_URL" ]; then
-  echo "  PaperMC download URL obtained"
-  curl -fsSL -o "$SERVER_JAR" "$JAR_URL" 2>/dev/null || {
+  echo "  PaperMC download URL: $JAR_URL"
+  curl -fsSL -o "$SERVER_JAR" "$JAR_URL" || {
     echo "  ⚠️  PaperMC download failed — falling back to vanilla"
     rm -f "$SERVER_JAR"
   }
@@ -40,7 +44,7 @@ fi
 # --- Fallback: vanilla via Mojang piston-meta ---
 if [ ! -s "$SERVER_JAR" ]; then
   echo "  ⬇️  Downloading vanilla $MC_VERSION (via Mojang)..."
-  read -r VER JAR_URL < <(python3 - <<'PY'
+  read -r VER JAR_URL < <(python3 - <<'PY' || true
 import json, urllib.request
 m = json.load(urllib.request.urlopen('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'))
 rel = m['latest']['release']
@@ -48,17 +52,19 @@ vj = json.load(urllib.request.urlopen(next(x['url'] for x in m['versions'] if x[
 print(rel, vj['downloads']['server']['url'])
 PY
 )
-  curl -fsSL -o "$SERVER_JAR" "$JAR_URL" || {
-    echo "  ❌ Vanilla download also failed!"
+  if [ -n "${JAR_URL:-}" ]; then
+    curl -fsSL -o "$SERVER_JAR" "$JAR_URL" || {
+      echo "  ❌ Vanilla download also failed!"
+      exit 1
+    }
+    echo "  ✅ Vanilla $VER downloaded"
+  else
+    echo "  ❌ Could not determine vanilla download URL"
     exit 1
-  }
-  echo "  ✅ Vanilla $VER downloaded"
+  fi
 fi
 
 echo "  Server jar: $(du -h "$SERVER_JAR" | cut -f1)"
-
-# --- Server directory ---
-mkdir -p server
 
 cat > server/eula.txt <<'EULA'
 eula=true
