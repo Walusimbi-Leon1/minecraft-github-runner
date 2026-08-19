@@ -34,9 +34,6 @@ jobs:
           DURATION=$(jq -r '.inputs.duration // "10800"' "$GITHUB_EVENT_PATH" 2>/dev/null || echo 10800)
           ./start.sh
           SERVER_PID=$(cat server.pid 2>/dev/null || true)
-          sleep 70
-          echo "=== server.log (world-gen check) ==="
-          tail -15 server.log 2>/dev/null || echo "no log yet"
           BORE_PID=$(cat bore.pid 2>/dev/null || true)
           echo "Server PID: ${SERVER_PID} | Bore PID: ${BORE_PID}"
           DUR=${DURATION:-10800}

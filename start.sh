@@ -11,8 +11,9 @@ RAM=${MC_RAM:-3G}
 cd "$(dirname "$0")"
 
 # --- Start PaperMC server in background ---
+# The jar is downloaded into ./server/ by setup.sh
 echo "Starting Minecraft server (port $PORT, ram $RAM)..."
-nohup java -Xmx$RAM -Xms2G -jar paper.jar nogui > server.log 2>&1 &
+nohup java -Xmx$RAM -Xms2G -jar server/paper.jar nogui > server/server.log 2>&1 &
 echo $! > server.pid
 SERVER_PID=$!
 
