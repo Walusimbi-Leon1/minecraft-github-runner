@@ -56,17 +56,20 @@ jobs:
             # tell the running server to flush to disk, then snapshot
             screen -S mc -X stuff 'save-all'$'\r' 2>/dev/null || true
             sleep 5
-            bash save-world.sh || echo "Auto-save failed - continuing"
+            timeout 90 bash save-world.sh || echo "Auto-save failed - continuing"
           done
           echo "=== Final world save before shutdown ==="
           screen -S mc -X stuff 'save-all'$'\r' 2>/dev/null || true
           sleep 6
-          bash save-world.sh || echo "Final save failed (server may have exited)"
+          timeout 90 bash save-world.sh || echo "Final save failed (server may have exited)"
           echo "=== Shutting down ==="
           # graceful stop via the server console (it saves on stop)
           screen -S mc -X stuff 'stop'$'\r' 2>/dev/null || true
-          sleep 8
+          sleep 15
+          # guarantee everything is reaped so the step can exit
           screen -S mc -X quit 2>/dev/null || true
+          pkill -f 'server/paper.jar' 2>/dev/null || true
           [ -n "$BORE_PID" ] && kill "$BORE_PID" 2>/dev/null || true
+          pkill -f 'bore local' 2>/dev/null || true
           sleep 3
           echo "Shutdown complete."
