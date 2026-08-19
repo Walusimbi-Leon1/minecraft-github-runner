@@ -41,14 +41,19 @@ jobs:
           ./start.sh
           BORE_PID=$(cat bore.pid 2>/dev/null || true)
           echo "Bore relay PID: ${BORE_PID}"
-          # Wait up to ~5 min for the world to generate before first save
-          for w in $(seq 1 30); do
+          # Wait up to ~3 min for the world to generate before first save
+          for w in $(seq 1 18); do
             if [ -d server/world ]; then echo "World generated after ~$((w*10))s"; break; fi
             sleep 10
           done
           if [ ! -d server/world ]; then
-            echo "⚠️  World not generated within 5 min — check server/server.log"
-            tail -25 server/server.log 2>/dev/null || true
+            echo "⚠️  World not generated within 3 min — dumping logs"
+            echo "--- server/server.log (screen -L capture) ---"
+            tail -40 server/server.log 2>/dev/null || echo "(empty)"
+            echo "--- server/logs/latest.log (PaperMC) ---"
+            tail -40 server/logs/latest.log 2>/dev/null || echo "(no latest.log)"
+            echo "--- screen sessions ---"
+            screen -ls 2>/dev/null || echo "(none)"
           fi
           DUR=${DURATION:-10800}
           SAVED=0
