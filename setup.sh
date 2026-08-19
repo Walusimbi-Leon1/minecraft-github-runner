@@ -21,9 +21,10 @@ else
   JAR_URL=$(python3 - "$MC_VERSION" <<'PY'
 import json, sys, urllib.request
 v = sys.argv[1]
+# v3 API returns a bare array of build objects (no 'builds' wrapper)
 bs = json.load(urllib.request.urlopen(f'https://fill.papermc.io/v3/projects/paper/versions/{v}/builds'))
 stable = [b for b in bs if b.get('channel') == 'STABLE']
-b = (stable or bs)[0]
+b = (stable or bs)[-1]
 print(b['downloads']['server:default']['url'])
 PY
 ) || true
