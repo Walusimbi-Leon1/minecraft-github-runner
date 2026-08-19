@@ -2,30 +2,50 @@
 set -euo pipefail
 
 # --- GitHub Actions setup ---
-# ubuntu-latest = Ubuntu 22.04/24.04 with Java 17 already.
-# We install Java 25 (newer) + wget + jq if missing.
+# ubuntu-latest ships Java 17 (we use it). Installs wget + jq if missing.
 
-if ! command -v java &>/dev/null; then
-  echo "Installing Java 25 (Temurin)..."
-  curl -s https://api.adoptium.net/v3/binary/latest/25/ga/linux/hotspot.tar.gz | tar -xz -C /tmp/
-  export JAVA_HOME=/tmp/jdk-25*
-  ln -sf /tmp/jdk-25*/bin/java /usr/local/bin/java
-fi
-echo "Java version:"; java -version 2>&1 | head -1
-
-# Install wget and jq if missing
 command -v wget >/dev/null || apt-get install -y -qq wget
 command -v jq >/dev/null || apt-get install -y -qq jq
 
-# --- PaperMC setup ---
-# Use papermc.io API v2 (fill.papermc.io/v3 format)
-PAPERMC_VERSION=$(curl -s https://api.papermc.io/v2/projects/paper | jq -r '.versions[-1]')
-PAPERMC_BUILD=$(curl -s "https://api.papermc.io/v2/projects/paper/versions/$PAPERMC_VERSION/builds" | jq -r '.builds[-1].build')
-echo "Installing PaperMC paper:$PAPERMC_VERSION-$PAPERMC_BUILD..."
-wget -qO paper.jar "https://api.papermc.io/v2/projects/paper/versions/$PAPERMC_VERSION/builds/$PAPERMC_BUILD/downloads/paper-$PAPERMC_VERSION-$PAPERMC_BUILD.jar"
-echo "PaperMC jar: $(du -h paper.jar | cut -f1)"
+echo "Java version:"; java -version 2>&1 | head -1
 
-# --- Server directory ---
+MC_VERSION=${MC_VERSION:-1.21.1}
+
+# --- PaperMC setup via fill.papermc.io/v3 (v2 API is SUNSET) ---
+echo "[3/6] Minecraft server jar (Paper $MC_VERSION)..."
+JAR_URL=""
+if [ -f paper.jar ]; then
+  echo "  ✅ Server jar already present ($(du -h paper.jar | cut -f1))"
+else
+  echo "  ⬇️  Downloading Paper $MC_VERSION (~40-60 MB)..."
+  JAR_URL=$(python3 - "$MC_VERSION" <<'PY'
+import json, sys, urllib.request
+v = sys.argv[1]
+bs = json.load(urllib.request.urlopen(f'https://fill.papermc.io/v3/projects/paper/versions/{v}/builds'))
+stable = [b for b in bs if b.get('channel') == 'STABLE']
+b = (stable or bs)[0]
+print(b['downloads']['server:default']['url'])
+PY
+) || true
+  if [ -n "$JAR_URL" ]; then
+    curl -fsSL -o paper.jar "$JAR_URL" || JAR_URL=""
+  fi
+  if [ -z "$JAR_URL" ] || [ ! -s paper.jar ]; then
+    echo "  ⚠️  Paper download failed — falling back to vanilla..."
+    read -r MC_VERSION JAR_URL < <(python3 - <<'PY'
+import json, urllib.request
+m = json.load(urllib.request.urlopen('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'))
+rel = m['latest']['release']
+vj = json.load(urllib.request.urlopen(next(x['url'] for x in m['versions'] if x['id'] == rel)))
+print(rel, vj['downloads']['server']['url'])
+PY
+)
+    curl -fsSL -o paper.jar "$JAR_URL"
+    echo "  ✅ Vanilla $MC_VERSION downloaded"
+  fi
+fi
+
+# --- Server directory + files ---
 mkdir -p server
 
 cat > server/eula.txt <<'EULA'
@@ -58,7 +78,6 @@ echo "Installing bore..."
 wget -qO bore https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-linux-amd64
 chmod +x bore
 
-# --- Print connection address ---
 echo "=== Minecraft server ready to start ==="
 echo "Run: ./start.sh"
 echo "Connect to: bore.pub:30176 (after start)"

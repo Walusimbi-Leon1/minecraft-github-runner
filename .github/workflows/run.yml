@@ -22,40 +22,56 @@ jobs:
       - name: Setup Minecraft server
         run: ./setup.sh
 
-      - name: Start server
+      - name: Start server & hold for duration
         env:
+          DURATION: ${{ github.event.inputs.duration || '10800' }}
+          GITHUB_TOKEN: *** secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT }}
           MC_PORT: 25565
           MC_BORE_PORT: 30176
-        run: ./start.sh &
-
-      - name: Auto-save every 15 minutes
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Save immediately so backup exists
-          bash save-world.sh
+          set -uo pipefail
+          cd "$GITHUB_WORKSPACE"
 
-          # Then every 15 minutes for ~3 hours (12 saves)
+          # 1. Restore last world save if a release asset exists.
+          # ... (save-world.sh will restore on next start)
+
+          # 2. Start the server (background) + bore relay.
+          ./start.sh
+          SERVER_PID=$(cat server.pid 2>/dev/null || echo "")
+          BORE_PID=$(cat bore.pid 2>/dev/null || echo "")
+          echo "Server PID: $SERVER_PID | Bore PID: $BORE_PID"
+
+          # 3. Auto-save every 15 minutes, then final save.
+          DUR=${DURATION:-10800}
+          SAVED=0
+          echo "=== Auto-save loop every 15 min ==="
           for i in $(seq 1 11); do
+            REMAIN=$(( DUR - SAVED - 900 ))
+            if [ "$REMAIN" -le 0 ]; then break; fi
             sleep 900
-            echo "=== Auto-save #$i at $(date) ==="
-            bash save-world.sh
+            SAVED=$((SAVED + 900))
+            echo "--- Auto-save #$i at $(date) (t=${SAVED}s) ---"
+            # Ask the server to flush the world to disk
+            if [ -n "$SERVER_PID" ]; then
+              kill -USR1 "$SERVER_PID" 2>/dev/null || true
+            fi
+            sleep 10
+            bash save-world.sh || echo "⚠️  Auto-save failed — continuing"
           done
 
-      - name: Final save & shutdown (on timeout)
-        if: always()
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
+          # 4. Final save before shutdown.
           echo "=== Final world save before shutdown ==="
-          # Try to ask a running server to save-all (if screen/pid exists)
-          if [ -f server.pid ]; then
-            echo "save-all" | timeout 5 bash -c "cat > /proc/$(cat server.pid)/fd/0" 2>/dev/null || true
+          if [ -n "$SERVER_PID" ]; then
+            kill -USR1 "$SERVER_PID" 2>/dev/null || true
+            sleep 5
           fi
-          bash save-world.sh || echo "Final save failed (server may have exited)"
+          bash save-world.sh || echo "⚠️  Final save failed (server may have exited)"
+
+          # 5. Graceful shutdown.
           echo "=== Shutting down ==="
-          [ -f server.pid ] && kill $(cat server.pid) 2>/dev/null || true
-          [ -f bore.pid ] && kill $(cat bore.pid) 2>/dev/null || true
+          [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
+          [ -n "$BORE_PID" ] && kill "$BORE_PID" 2>/dev/null || true
+          sleep 3
           echo "Shutdown complete."
