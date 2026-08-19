@@ -26,6 +26,8 @@ jobs:
         run: ./setup.sh
 
       - name: Start server & hold for duration
+        env:
+          GH_PAT: ${{secrets.GH_PAT}}
         run: |
           set -uo pipefail
           cd "$GITHUB_WORKSPACE"
