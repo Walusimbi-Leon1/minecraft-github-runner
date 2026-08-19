@@ -2,15 +2,30 @@
 set -euo pipefail
 
 # --- GitHub Actions setup ---
-# ubuntu-latest ships Java 17 (we use it). Installs wget + jq if missing.
+# PaperMC 1.21.x requires Java 21. ubuntu-latest ships Java 17 by default,
+# so we install JDK 21 explicitly via apt (fallback: manual tarball).
+# Also installs wget, jq, screen.
 
-command -v wget >/dev/null || apt-get install -y -qq wget
-command -v jq >/dev/null || apt-get install -y -qq jq
+sudo apt-get update -y -qq || apt-get update -y -qq
+for pkg in wget jq screen openjdk-21-jre-headless; do
+  command -v "$pkg" >/dev/null 2>&1 || sudo apt-get install -y -qq "$pkg" || apt-get install -y -qq "$pkg"
+done
 
-echo "Java version:"; java -version 2>&1 | head -1
+# Ensure java 21 is the default
+if command -v java >/dev/null; then
+  JV=$(java -version 2>&1 | head -1)
+  echo "Java: $JV"
+  if ! echo "$JV" | grep -q '"21'; then
+    echo "  ⚠️  Default java is not 21; trying to switch..."
+    sudo update-alternatives --set java /usr/lib/jvm/java-21-openjdk-amd64/bin/java 2>/dev/null || true
+    echo "  Java now: $(java -version 2>&1 | head -1)"
+  fi
+else
+  echo "❌ Java not installed"
+  exit 1
+fi
 
 # --- Minecraft server jar ---
-# Try PaperMC first via fill.papermc.io/v3 (new API). Fallback to vanilla via Mojang.
 echo "[3/6] Downloading Minecraft server jar..."
 
 # IMPORTANT: create server dir BEFORE downloading (curl can't write into a missing dir)
@@ -41,7 +56,7 @@ if [ -n "$JAR_URL" ]; then
   }
 fi
 
-# --- Fallback: vanilla via Mojang piston-meta ---
+# --- Fallback: vanilla via Mojang piston-meta (also expects Java 21) ---
 if [ ! -s "$SERVER_JAR" ]; then
   echo "  ⬇️  Downloading vanilla $MC_VERSION (via Mojang)..."
   read -r VER JAR_URL < <(python3 - <<'PY' || true

@@ -33,20 +33,17 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           DURATION=$(jq -r '.inputs.duration // "10800"' "$GITHUB_EVENT_PATH" 2>/dev/null || echo 10800)
           ./start.sh
-          SERVER_PID=$(cat server.pid 2>/dev/null || true)
           BORE_PID=$(cat bore.pid 2>/dev/null || true)
-          echo "Server PID: ${SERVER_PID} | Bore PID: ${BORE_PID}"
+          echo "Bore relay PID: ${BORE_PID}"
           # Wait up to ~5 min for the world to generate before first save
           for w in $(seq 1 30); do
             if [ -d server/world ]; then echo "World generated after ~$((w*10))s"; break; fi
             sleep 10
           done
-          echo "=== debug: server dir ==="
-          ls -la server/ 2>/dev/null || echo "no server dir"
-          echo "=== server.log (last 25) ==="
-          tail -25 server/server.log 2>/dev/null || echo "no server.log"
-          echo "=== bore.log (last 10) ==="
-          tail -10 bore.log 2>/dev/null || echo "no bore.log"
+          if [ ! -d server/world ]; then
+            echo "⚠️  World not generated within 5 min — check server/server.log"
+            tail -25 server/server.log 2>/dev/null || true
+          fi
           DUR=${DURATION:-10800}
           SAVED=0
           echo "=== Auto-save loop every 15 min ==="
@@ -56,20 +53,20 @@ jobs:
             sleep 900
             SAVED=$((SAVED + 900))
             echo "--- Auto-save #${i} at $(date) (t=${SAVED}s) ---"
-            if [ -n "$SERVER_PID" ]; then
-              kill -USR1 "$SERVER_PID" 2>/dev/null || true
-            fi
-            sleep 10
+            # tell the running server to flush to disk, then snapshot
+            screen -S mc -X stuff 'save-all'$'\r' 2>/dev/null || true
+            sleep 5
             bash save-world.sh || echo "Auto-save failed - continuing"
           done
           echo "=== Final world save before shutdown ==="
-          if [ -n "$SERVER_PID" ]; then
-            kill -USR1 "$SERVER_PID" 2>/dev/null || true
-            sleep 5
-          fi
+          screen -S mc -X stuff 'save-all'$'\r' 2>/dev/null || true
+          sleep 6
           bash save-world.sh || echo "Final save failed (server may have exited)"
           echo "=== Shutting down ==="
-          [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
+          # graceful stop via the server console (it saves on stop)
+          screen -S mc -X stuff 'stop'$'\r' 2>/dev/null || true
+          sleep 8
+          screen -S mc -X quit 2>/dev/null || true
           [ -n "$BORE_PID" ] && kill "$BORE_PID" 2>/dev/null || true
           sleep 3
           echo "Shutdown complete."
