@@ -41,6 +41,12 @@ jobs:
             if [ -d server/world ]; then echo "World generated after ~$((w*10))s"; break; fi
             sleep 10
           done
+          echo "=== debug: server dir ==="
+          ls -la server/ 2>/dev/null || echo "no server dir"
+          echo "=== server.log (last 25) ==="
+          tail -25 server/server.log 2>/dev/null || echo "no server.log"
+          echo "=== bore.log (last 10) ==="
+          tail -10 bore.log 2>/dev/null || echo "no bore.log"
           DUR=${DURATION:-10800}
           SAVED=0
           echo "=== Auto-save loop every 15 min ==="
