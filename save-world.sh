@@ -27,6 +27,7 @@ echo "=================================================="
 TOKEN=""
 if [ -n "${GH_TOKEN:-}" ]; then TOKEN="$GH_TOKEN"; fi
 if [ -z "$TOKEN" ] && [ -n "${GITHUB_TOKEN:-}" ]; then TOKEN="$GITHUB_TOKEN"; fi
+if [ -z "$TOKEN" ] && [ -n "${GH_PAT:-}" ]; then TOKEN="$GH_PAT"; fi
 if [ -z "$TOKEN" ] && [ -f "$SCRIPT_DIR/.token" ]; then TOKEN="$(tr -d ' \r\n' < "$SCRIPT_DIR/.token")"; fi
 if [ -z "$TOKEN" ]; then
   REMOTE=$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null || true)
