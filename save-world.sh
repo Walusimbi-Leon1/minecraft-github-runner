@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # save-world.sh — Save the Minecraft world to GitHub (release asset), so it
-# survives Colab's ephemeral VMs. start.sh automatically restores it next run.
+# survives ephemeral runners. start.sh automatically restores it next run.
 # Usage:    bash save-world.sh
 # Works whether or not the server is currently running.
 #
@@ -11,15 +11,15 @@ set -euo pipefail
 #   from), as an asset "world.tar.gz". Re-running replaces the asset.
 #
 # Auth (picks the first that works):
-#   1. $GH_TOKEN / $GITHUB_TOKEN env var
+#   1. $GH_TOKEN / $GITHUB_TOKEN / $GH_PAT env var
 #   2. A file named .token in this repo folder
-#   3. The token embedded in the clone URL (https://TOKEN@github.com/...)
+#   3. The token embedded in the clone URL (https://<token>@github.com/...)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_DIR="$SCRIPT_DIR/server"
 
 echo "=================================================="
-echo "  💾 LA5 Colab World Save"
+echo "  💾 LA5 World Save"
 echo "  $(date)"
 echo "=================================================="
 
@@ -36,7 +36,7 @@ if [ -z "$TOKEN" ]; then
   esac
 fi
 if [ -z "$TOKEN" ]; then
-  echo "❌ No GitHub token found. Set GH_TOKEN, add a .token file, or clone with"
+  echo "❌ No GitHub token found. Set GH_TOKEN/GH_PAT, add a .token file, or clone with"
   echo "   https://<token>@github.com/...  (see README)"
   exit 1
 fi

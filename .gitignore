@@ -2,3 +2,7 @@
 server/
 *.log
 world-backup-*.tar.gz
+bore.log
+cloudflared.log
+bore.pid
+server-address.txt

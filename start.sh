@@ -1,63 +1,225 @@
-#!/bin/bash
-set -uo pipefail
+#!/usr/bin/env bash
+set -euo pipefail
 
-# start.sh — launches the PaperMC server inside a `screen` session (name: mc)
-# plus the bore.pub TCP relay, prints the public address, then returns. The
-# workflow holds the runner for the duration and calls save-world.sh (which
-# sends save-all into the screen session) and finally stops the server.
-#
-# IMPORTANT: PaperMC resolves eula.txt / server.properties / world / logs
-# relative to its WORKING DIRECTORY. We therefore run java from inside the
-# `server/` directory so those files (written there by setup.sh) are found.
+# start.sh — Start the Minecraft server + public tunnels, print BOTH addresses:
+#   1. bore.pub:PORT        → paste directly into Minecraft Java (Add Server)
+#   2. wss://…trycloudflare → for Eaglercraft browser clients (Add Server)
+# Also: restores a saved world from GitHub if present.
+# Usage:    bash start.sh
+# Re-runnable: stops any previous server/tunnel from this repo first.
+# Env:      MC_RAM=2048M  MC_PORT=25565  AUTOSAVE=15 (minutes, 0=off)
 
-PORT=${MC_PORT:-25565}
-RAM=${MC_RAM:-3G}
-BORE_PORT=${MC_BORE_PORT:-30176}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVER_DIR="$SCRIPT_DIR/server"
+ENV_FILE="$SERVER_DIR/mc-env"
 
-REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
-SERVER_DIR="$REPO_ROOT/server"
-cd "$SERVER_DIR"
+echo "=================================================="
+echo "  ⛏️  LA5 GitHub Runner Start — Minecraft Server"
+echo "  $(date)"
+echo "=================================================="
 
-# --- Start PaperMC server in a screen session (cwd = server/) ---
-# -L -Logfile captures stdout/stderr to $SERVER_DIR/server.log for diagnostics.
-echo "Starting Minecraft server (port $PORT, ram $RAM)..."
-screen -dmS mc -L -Logfile "$SERVER_DIR/server.log" java -Xmx$RAM -Xms2G -jar paper.jar nogui
-echo "Server screen 'mc' started."
-
-# Give the server a moment to bind
-sleep 10
-echo "Server status:"
-screen -ls mc || echo "  (no screen session — server may have crashed; see server/server.log)"
-
-# --- Start bore.pub relay (from repo root so ./bore resolves) ---
-# NOTE: bore's *pub* port is NOT the same as $BORE_PORT (which is the upstream
-# port we request). bore.pub assigns a public port dynamically. We must read
-# the *actual* assigned address from bore.log, not assume $BORE_PORT.
-# Passing --to bore.pub:$BORE_PORT only requests that upstream port; the real
-# public endpoint comes back in bore.log.
-echo "Starting bore.pub relay (requesting upstream port $BORE_PORT)..."
-nohup "$REPO_ROOT/bore" local tcp://127.0.0.1:$PORT --to bore.pub:$BORE_PORT > "$REPO_ROOT/bore.log" 2>&1 &
-echo $! > "$REPO_ROOT/bore.pid"
-BORE_PID=$!
-
-# Read the REAL assigned public address from bore.log.
-# bore takes a few seconds to register; poll up to ~60s for the address line.
-echo "Waiting for bore to register the public address..."
-ADDRESS=""
-for i in $(seq 1 30); do
-  ADDRESS=$(grep -oE 'bore\.pub:[0-9]+' "$REPO_ROOT/bore.log" 2>/dev/null | head -1 || true)
-  if [ -n "$ADDRESS" ]; then break; fi
-  sleep 2
-done
-
-echo "=== Minecraft server ready ==="
-if [ -n "$ADDRESS" ]; then
-  echo "Connect to: $ADDRESS"
-else
-  echo "Connect to: bore.pub:$BORE_PORT (fallback — address not read from bore.log)"
+if [ ! -f "$ENV_FILE" ]; then
+  echo "❌ Not set up yet — run:  bash setup.sh"
+  exit 1
 fi
+
+# Capture per-run overrides BEFORE sourcing mc-env (which would clobber them)
+ENV_PORT="${MC_PORT:-}"
+ENV_RAM="${MC_RAM:-}"
+ENV_AUTOSAVE="${AUTOSAVE:-}"
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+
+PORT="${ENV_PORT:-$PORT}"
+RAM="${ENV_RAM:-$MC_RAM}"
+AUTOSAVE="${ENV_AUTOSAVE:-15}"
+
+if [ ! -x "$JAVA_BIN" ]; then
+  echo "❌ Java not found at $JAVA_BIN — run:  bash setup.sh"
+  exit 1
+fi
+if [ ! -f "$MC_JAR" ]; then
+  echo "❌ Server jar not found — run:  bash setup.sh"
+  exit 1
+fi
+
+# ── World restore from GitHub (world-save release) ────
+# If there's no local world yet, try to pull the last saved one from GitHub
+# so we continue exactly where we left off.
+if [ ! -d "$SERVER_DIR/world" ]; then
+  echo "🔎 No local world — checking GitHub for a saved world..."
+  REMOTE=$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null || true)
+  TOKEN=""
+  if [ -n "${GH_TOKEN:-}" ]; then TOKEN="$GH_TOKEN"; fi
+  if [ -z "$TOKEN" ] && [ -n "${GITHUB_TOKEN:-}" ]; then TOKEN="$GITHUB_TOKEN"; fi
+  if [ -z "$TOKEN" ] && [ -n "${GH_PAT:-}" ]; then TOKEN="$GH_PAT"; fi
+  if [ -z "$TOKEN" ] && [ -f "$SCRIPT_DIR/.token" ]; then TOKEN="$(tr -d ' \r\n' < "$SCRIPT_DIR/.token")"; fi
+  if [ -z "$TOKEN" ]; then
+    case "$REMOTE" in
+      https://*@github.com/*) TOKEN="${REMOTE#https://}"; TOKEN="${TOKEN%%@*}" ;;
+    esac
+  fi
+  REPO=""
+  case "${REMOTE:-}" in
+    https://*github.com/*) REPO="${REMOTE##*github.com/}" ;;
+    git@github.com:*) REPO="${REMOTE##git@github.com:}" ;;
+  esac
+  REPO="${REPO%.git}"
+  if [ -n "$REPO" ] && [ -n "$TOKEN" ]; then
+    API="https://api.github.com/repos/$REPO"
+    AUTH="Authorization: Bearer $TOKEN"
+    ASSET=$(curl -fsS -H "$AUTH" "$API/releases/tags/world-save" 2>/dev/null \
+      | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for a in d.get('assets',[]):
+    if a['name']=='world.tar.gz':
+        print(a['id']); break
+" 2>/dev/null || true)
+    if [ -n "$ASSET" ]; then
+      echo "  ⬇️  Restoring world from GitHub release 'world-save'..."
+      if curl -fsSL -H "$AUTH" -H "Accept: application/octet-stream" \
+          -o /tmp/world-restore.tar.gz "$API/releases/assets/$ASSET" \
+          && tar xzf /tmp/world-restore.tar.gz -C "$SERVER_DIR" \
+          && rm -f /tmp/world-restore.tar.gz; then
+        echo "  ✅ World restored!"
+      else
+        echo "  ⚠️  World restore failed — starting fresh"
+      fi
+    else
+      echo "  ℹ️  No saved world found — a new world will be generated."
+    fi
+  else
+    echo "  ℹ️  No GitHub token/repo — a new world will be generated."
+  fi
+else
+  echo "✅ Local world found — using it."
+fi
+
+# ── Clean up any previous run ──────────────────────────
+# [.] avoids pkill matching this script's own command line.
+# Only the *tcp* cloudflared tunnel is killed — the gateway tunnel is left alone.
+pkill -f 'paper[.]jar' 2>/dev/null || true
+sleep 2
+pkill -9 -f 'paper[.]jar' 2>/dev/null || true
+pkill -f "[b]ore local $PORT" 2>/dev/null || true
+pkill -f '[c]loudflared tunnel --url tcp' 2>/dev/null || true
+pkill -f "[c]loudflared tunnel --url http://localhost:$PORT" 2>/dev/null || true
+sleep 1
+
+# ── Start the server (in a screen session named "mc") ──
+cd "$SERVER_DIR"
+echo "🚀 Starting $MC_VERSION server (heap ${RAM}) on port $PORT..."
+# Clear any previous (possibly dead) 'mc' screen socket, or -dmS would fail.
+screen -S mc -X quit 2>/dev/null || true
+screen -wipe 2>/dev/null || true
+# -L -Logfile captures stdout/stderr to $SERVER_DIR/server.log for diagnostics.
+screen -dmS mc -L -Logfile "$SERVER_DIR/server.log" \
+  "$JAVA_BIN" -Xms"$RAM" -Xmx"$RAM" -jar paper.jar
+
+# Only look at log content written AFTER this run started (the log appends
+# across runs — old "Done"/errors must not confuse this run's checks):
+LOG_POS=$(wc -c < "$SERVER_DIR/server.log" 2>/dev/null || echo 0)
+NEWLOG() { tail -c +$((LOG_POS + 1)) "$SERVER_DIR/server.log"; }
+
+UP=0
+SEEN=0
+for _ in $(seq 1 300); do
+  if NEWLOG | grep -q "Done ("; then
+    UP=1
+    break
+  fi
+  # A real fatal error beats a timeout wait:
+  if NEWLOG | grep -qiE "Failed to bind|BindException|Failed to start the minecraft server|Fatal exception|Overworld settings missing"; then
+    echo "❌ Server failed to start — tail server/server.log"
+    echo "   (corrupt world? fix: rm -rf server/world* then re-run)"
+    exit 1
+  fi
+  # Only declare "died" once the JVM was actually seen running (avoids the
+  # race between cleanup and the new JVM spawning):
+  if pgrep -f 'paper[.]jar' >/dev/null 2>&1; then
+    SEEN=1
+  elif [ "$SEEN" = 1 ]; then
+    echo "❌ Server process died — tail server/server.log for errors"
+    exit 1
+  fi
+  sleep 1
+done
+if [ "$UP" = 0 ]; then
+  echo "⚠️  Server still starting (not 'Done' yet) — tail server/server.log"
+else
+  echo "✅ Server fully running on 127.0.0.1:$PORT (screen session 'mc')"
+fi
+
+# ── Direct address for Minecraft Java (bore → bore.pub) ──
+ADDR=""
+if [ -n "${BORE_BIN:-}" ] && [ -x "$BORE_BIN" ]; then
+  echo "🌐 Opening direct tunnel (bore.pub) for Java clients..."
+  setsid nohup "$BORE_BIN" local "$PORT" --to bore.pub \
+    > "$SCRIPT_DIR/bore.log" 2>&1 < /dev/null &
+  BORE_PID=$!
+  echo "$BORE_PID" > "$SCRIPT_DIR/bore.pid"
+  for _ in $(seq 1 30); do
+    ADDR=$(grep -oE 'bore\.pub:[0-9]+' "$SCRIPT_DIR/bore.log" 2>/dev/null | tail -1 || true)
+    [ -n "$ADDR" ] && break
+    sleep 1
+  done
+fi
+
+# ── wss:// address for Eaglercraft (cloudflared HTTP tunnel) ──
+CF_URL=""
+if command -v cloudflared >/dev/null 2>&1; then
+  echo "🌐 Opening wss:// tunnel (cloudflared) for Eaglercraft..."
+  setsid nohup cloudflared tunnel --url "http://localhost:$PORT" --no-autoupdate \
+    > "$SCRIPT_DIR/cloudflared.log" 2>&1 < /dev/null &
+  for _ in $(seq 1 60); do
+    CF_URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$SCRIPT_DIR/cloudflared.log" 2>/dev/null | head -1 || true)
+    [ -n "$CF_URL" ] && break
+    sleep 1
+  done
+fi
+
+echo ""
+echo "=================================================="
+echo "  ✅ Minecraft server is LIVE!"
+echo "=================================================="
+echo ""
+if [ -n "$ADDR" ]; then
+  echo "  🖥️  JAVA EDITION (normal Minecraft client):"
+  echo "      Multiplayer → Add Server → Server Address:"
+  echo ""
+  echo "      $ADDR"
+  echo ""
+fi
+if [ -n "$CF_URL" ]; then
+  echo "  🌐 EAGLERCRAFT (browser client):"
+  echo "      Multiplayer → Add Server → Server Address:"
+  echo ""
+  echo "      ${CF_URL/https:/wss:}"
+  echo ""
+  echo "      (that's the same URL with wss:// instead of https://)"
+fi
+if [ -z "$ADDR" ] && [ -z "$CF_URL" ]; then
+  echo "  ❌ No tunnel could be opened. Check internet, then re-run: bash start.sh"
+fi
+echo "  🎮 Version compatibility: Via* plugins installed — clients from 1.7.10 → latest can join."
+echo ""
+echo "  ⚠️  Offline mode (tunnel-friendly). Keep strangers out:"
+echo "      ./mc.sh whitelist on"
+echo "      ./mc.sh whitelist add <your-username>"
+echo ""
+echo "  💾 World save:  ./save-world.sh  (uploads to GitHub, survives resets)"
+if [ "$AUTOSAVE" -gt 0 ] 2>/dev/null; then
+  echo "     Auto-save every ${AUTOSAVE} min is ON (AUTOSAVE=0 disables)."
+  ( while true; do sleep $((AUTOSAVE * 60)); bash "$SCRIPT_DIR/save-world.sh" >/dev/null 2>&1; done ) &
+  disown
+fi
+echo ""
+echo "  Useful:  ./mc.sh <command>  (server console, e.g. ./mc.sh say hi)"
+echo "           ./mc.sh log        (follow server log)"
+echo "           ./stop.sh          (stop server + tunnels)"
+echo "  Logs:    server/server.log · server/bore.log · server/cloudflared.log"
+echo ""
+
 # Persist the real address for the workflow + for operators
-printf '%s' "$ADDRESS" > "$REPO_ROOT/server-address.txt" 2>/dev/null || true
-echo "$ADDRESS" > "$SERVER_DIR/server-address.txt" 2>/dev/null || true
-echo "(Use 'Java Edition' or EagleCraft browser client)"
-echo "Server is running in screen session 'mc'."
+printf '%s' "$ADDR" > "$SCRIPT_DIR/server-address.txt" 2>/dev/null || true
